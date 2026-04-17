@@ -1,5 +1,10 @@
 # copilot-memory
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+
+*Extracted from [GENesis-AGI](https://github.com/WingedGuardian/GENesis-AGI). Genesis's 4-layer hybrid memory (Qdrant + FTS5 + KG + relational) scaled this pattern to production; this is the standalone 2-layer core (Qdrant + FTS5 fused via RRF).*
+
 **Hybrid AI memory system**: Qdrant vector search + SQLite FTS5 full-text search, fused via Reciprocal Rank Fusion with multi-factor scoring.
 
 ## Features
