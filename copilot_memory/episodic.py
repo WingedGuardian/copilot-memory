@@ -146,6 +146,7 @@ class EpisodicStore:
     async def store_extractions(
         self, extractions: dict[str, Any], session_key: str,
         conversation_ts: float | None = None,
+        tags: list[str] | None = None,
     ) -> list[str]:
         """Store individual facts/decisions/entities as separate high-importance points."""
         ids = []
@@ -158,6 +159,7 @@ class EpisodicStore:
                     role=role,
                     importance=0.8,
                     conversation_ts=conversation_ts,
+                    metadata={"tags": tags or []},
                 )
                 ids.append(pid)
         return ids

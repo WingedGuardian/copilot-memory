@@ -79,10 +79,12 @@ class MemoryManager:
         conversation_ts: float | None = None,
     ) -> list[str]:
         """Store extractions to Qdrant + FTS5 + SQLite structured items."""
+        tags = extractions.get("tags", [])
         ids = []
         try:
             ids = await self._episodic.store_extractions(
                 extractions, session_key, conversation_ts=conversation_ts,
+                tags=tags,
             )
         except Exception as e:
             logger.warning(f"Extraction storage failed: {e}")
@@ -123,6 +125,7 @@ class MemoryManager:
                     value=item,
                     session_key=session_key,
                     source="extraction",
+                    tags=tags,
                 )
         return ids
 
@@ -177,37 +180,66 @@ class MemoryManager:
         value: str,
         session_key: str,
         source: str,
+        tier: str = "domain",
+        tags: list[str] | None = None,
+        confidence: float | None = None,
     ) -> None:
         """SQLite INSERT ON CONFLICT with confidence boost."""
+        import json as _json
+        tags_json = _json.dumps(tags or [])
         try:
             async with aiosqlite.connect(self._db_path) as db:
-                await db.execute(
-                    """INSERT INTO memory_items (category, key, value, session_key, source)
-                       VALUES (?, ?, ?, ?, ?)
-                       ON CONFLICT(category, key) DO UPDATE SET
-                           value = excluded.value,
-                           confidence = MIN(confidence + 0.1, 1.0),
-                           access_count = access_count + 1,
-                           updated_at = CURRENT_TIMESTAMP""",
-                    (category, key, value, session_key, source),
-                )
+                if confidence is not None:
+                    await db.execute(
+                        """INSERT INTO memory_items (category, key, value, session_key, source, tier, tags, confidence)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                           ON CONFLICT(category, key) DO UPDATE SET
+                               value = excluded.value,
+                               confidence = MAX(confidence, excluded.confidence),
+                               access_count = access_count + 1,
+                               tier = CASE WHEN excluded.tier = 'domain' THEN tier ELSE excluded.tier END,
+                               tags = CASE WHEN excluded.tags = '[]' THEN tags ELSE excluded.tags END,
+                               updated_at = CURRENT_TIMESTAMP""",
+                        (category, key, value, session_key, source, tier, tags_json, confidence),
+                    )
+                else:
+                    await db.execute(
+                        """INSERT INTO memory_items (category, key, value, session_key, source, tier, tags)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)
+                           ON CONFLICT(category, key) DO UPDATE SET
+                               value = excluded.value,
+                               confidence = MIN(confidence + 0.1, 1.0),
+                               access_count = access_count + 1,
+                               tier = CASE WHEN excluded.tier = 'domain' THEN tier ELSE excluded.tier END,
+                               tags = CASE WHEN excluded.tags = '[]' THEN tags ELSE excluded.tags END,
+                               updated_at = CURRENT_TIMESTAMP""",
+                        (category, key, value, session_key, source, tier, tags_json),
+                    )
                 await db.commit()
         except Exception as e:
             logger.warning(f"Memory item upsert failed: {e}")
             logger.warning(f"Alert: " + str(("memory", "medium", f"Structured memory write failed: {e}", "upsert_item",)))
 
     async def get_high_confidence_items(
-        self, min_confidence: float = 0.6, limit: int = 20
+        self, min_confidence: float = 0.6, limit: int = 20, tier: str | None = None,
     ) -> list[dict]:
         """Fetch high-confidence structured memory items."""
         try:
             async with aiosqlite.connect(self._db_path) as db:
-                cursor = await db.execute(
-                    """SELECT category, key, value, confidence, access_count
-                       FROM memory_items WHERE confidence >= ?
-                       ORDER BY confidence DESC LIMIT ?""",
-                    (min_confidence, limit),
-                )
+                if tier:
+                    cursor = await db.execute(
+                        """SELECT category, key, value, confidence, access_count
+                           FROM memory_items WHERE confidence >= ? AND tier = ?
+                           ORDER BY confidence DESC LIMIT ?""",
+                        (min_confidence, tier, limit),
+                    )
+                else:
+                    cursor = await db.execute(
+                        """SELECT category, key, value, confidence, access_count
+                           FROM memory_items WHERE confidence >= ?
+                           ORDER BY confidence DESC LIMIT ?""",
+                        (min_confidence, limit),
+                    )
                 rows = await cursor.fetchall()
                 cols = [d[0] for d in cursor.description]
                 return [dict(zip(cols, row)) for row in rows]
@@ -215,19 +247,33 @@ class MemoryManager:
             logger.warning(f"Memory items query failed: {e}")
             return []
 
-    async def store_fact(self, content: str, category: str, session_key: str) -> str:
-        """Store an explicit fact to all backends (searchable immediately)."""
+    async def store_fact(
+        self,
+        content: str,
+        category: str,
+        session_key: str,
+        tier: str = "domain",
+        tags: list[str] | None = None,
+    ) -> str:
+        """Store an explicit fact to all backends (searchable immediately).
+
+        Agent-deliberate stores get importance=0.9 (outranks passive extraction at 0.8)
+        and confidence=0.7 (above extraction default of 0.5).
+        """
         # 1. SQLite memory_items (structured, confidence-tracked)
         await self._upsert_item(
             category=category, key=content[:100], value=content,
             session_key=session_key, source="agent",
+            tier=tier, tags=tags, confidence=0.7,
         )
-        # 2. Qdrant (semantic search)
+        # 2. Qdrant (semantic search) — importance=0.9 for agent-explicit
         point_id = ""
         try:
             point_id = await self._episodic.store(
                 text=f"[{category}] {content}",
                 session_key=session_key, role=category,
+                importance=0.9,
+                metadata={"tags": tags or []},
             )
         except Exception as e:
             logger.warning(f"Episodic store_fact failed: {e}")
@@ -236,7 +282,7 @@ class MemoryManager:
         try:
             await self._fts.store(
                 f"[{category}] {content}",
-                session_key, importance=0.8,
+                session_key, importance=0.9,
             )
         except Exception as e:
             logger.warning(f"FTS store_fact failed: {e}")
@@ -244,8 +290,10 @@ class MemoryManager:
         return point_id
 
     async def get_core_facts_block(self, budget_tokens: int = 200) -> str:
-        """Format high-confidence items as a system prompt block."""
-        items = await self.get_high_confidence_items(min_confidence=0.8, limit=10)
+        """Format high-confidence core-tier items as a system prompt block."""
+        items = await self.get_high_confidence_items(
+            min_confidence=0.8, limit=10, tier="core",
+        )
         if not items:
             return ""
         lines = ["## Core Facts"]
