@@ -1,28 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "copilot-memory"
+name = "genesis-memory"
 version = "0.1.0"
-description = "Hybrid AI memory: Qdrant vectors + SQLite FTS5 with multi-factor scoring"
-requires-python = ">=3.11"
+description = "Production-grade memory system with RRF hybrid retrieval, activation scoring, and knowledge graph — extracted from the Genesis autonomous agent"
+readme = "README.md"
 license = {text = "MIT"}
-keywords = ["ai", "memory", "qdrant", "fts5", "vector-search", "llm"]
+requires-python = ">=3.10"
+authors = [{name = "WingedGuardian"}]
+keywords = ["memory", "retrieval", "rrf", "ai", "agent", "vector-search", "fts5"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-
 dependencies = [
-    "qdrant-client>=1.7.0",
-    "aiosqlite>=0.19.0",
-    "openai>=1.0.0",
-    "loguru>=0.7.0",
+    "aiosqlite>=0.20",
+    "httpx>=0.25",
+    "chromadb>=1.0",
+    "diskcache>=5.6",
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0.0"]
+qdrant = ["qdrant-client>=1.7"]
+demo = ["anthropic>=0.40", "openai>=1.50", "rich>=13.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[project.urls]
+Homepage = "https://github.com/WingedGuardian/genesis-memory"
+Source = "https://github.com/WingedGuardian/genesis-memory"
+Issues = "https://github.com/WingedGuardian/genesis-memory/issues"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
